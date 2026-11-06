@@ -110,13 +110,21 @@ struct ContentView: View {
     }
 
     private var status: some View {
-        HStack {
-            Circle().fill(dot).frame(width: 9, height: 9)
-            Text(stateText).font(.footnote).lineLimit(1)
-            Spacer()
-            if mirror.stats.frames > 0 {
-                Text("\(mirror.stats.frames) frames · \(mirror.stats.gaps) gaps · \(mirror.stats.bad) bad")
-                    .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Circle().fill(dot).frame(width: 9, height: 9)
+                Text(stateText).font(.footnote).lineLimit(1)
+                Spacer()
+                if mirror.stats.frames > 0 {
+                    Text("\(mirror.stats.frames) frames · \(mirror.stats.gaps) gaps · \(mirror.stats.bad) bad")
+                        .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+                }
+            }
+            switch mirror.state {
+            case .connecting, .mirroring, .failed:
+                Text(mirror.wireNote).font(.caption2.monospacedDigit()).foregroundStyle(.secondary).lineLimit(2)
+            default:
+                EmptyView()
             }
         }
     }

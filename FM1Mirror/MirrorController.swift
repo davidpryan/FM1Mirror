@@ -32,6 +32,20 @@ final class MirrorController: ObservableObject {
     @Published private(set) var hello: MirrorHello?
     @Published private(set) var input: MirrorInput?
     @Published var selected: MIDIDevice?
+    /// What went over the wire: for the status line when nothing comes back.
+    struct Wire: Equatable {
+        var sent = 0, sendErrors = 0, lastSendStatus: OSStatus = 0
+        var packets = 0, words = 0, sysex = 0, mirrorFrames = 0
+        var lastHead = ""
+        var summary: String {
+            var s = "out \(sent)" + (sendErrors > 0 ? " (\(sendErrors) failed, \(lastSendStatus))" : "")
+            s += " · in \(packets) pkt / \(sysex) sysex / \(mirrorFrames) mirror"
+            if !lastHead.isEmpty { s += " · last " + lastHead }
+            return s
+        }
+    }
+    @Published private(set) var wire = Wire()
+    private var connectedAt = Date.distantPast
 
     let screen = MirrorScreen()
     private var client = MIDIClientRef()
@@ -65,19 +79,20 @@ final class MirrorController: ObservableObject {
         }
         guard status == noErr else { state = .failed("Core MIDI client: \(status)"); return }
         MIDIInputPortCreateWithProtocol(client, "FM1Mirror in" as CFString, ._1_0, &inPort) { [weak self] list, _ in
-            // (Core MIDI's own thread: the words copied out, the parsing on the main actor)
+            // (Core MIDI's own thread: the words copied out, the parsing on the main actor). The packets are walked
+            // in place: a copy of the first one and MIDIEventPacketNext from the copy's address read garbage after it
             var words: [UInt32] = []
-            let count = Int(list.pointee.numPackets)
-            var packet = list.pointee.packet
-            for _ in 0 ..< count {
-                let n = Int(packet.wordCount)
-                withUnsafeBytes(of: &packet.words) { raw in
-                    let p = raw.bindMemory(to: UInt32.self)
-                    words.append(contentsOf: p.prefix(n))
+            var packets = 0
+            for p in list.unsafeSequence() {
+                let n = Int(p.pointee.wordCount)
+                withUnsafeBytes(of: p.pointee.words) { raw in
+                    let w = raw.bindMemory(to: UInt32.self)
+                    words.append(contentsOf: w.prefix(n))
                 }
-                packet = MIDIEventPacketNext(&packet).pointee
+                packets += 1
             }
-            Task { @MainActor in self?.receive(words: words) }
+            let got = packets
+            Task { @MainActor in self?.receive(words: words, packets: got) }
         }
         MIDIOutputPortCreate(client, "FM1Mirror out" as CFString, &outPort)
     }
@@ -137,12 +152,30 @@ final class MirrorController: ObservableObject {
         screen.clear()
         screen.resync()
         state = .connecting
+        wire = Wire()
+        connectedAt = Date()
         send(MirrorScreen.request(2))
         keepAlive?.invalidate()
         keepAlive = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.send(MirrorScreen.request(1)) }
+            Task { @MainActor in
+                guard let self else { return }
+                self.send(MirrorScreen.request(1))
+                if case .connecting = self.state, Date().timeIntervalSince(self.connectedAt) > 6 {
+                    self.send(MirrorScreen.request(2))     // (asked again: the first may have gone before the device was ready)
+                }
+            }
         }
         startRedraw()
+    }
+
+    /// The status line's second half: what the wire says while the screen is awaited, or after a failure.
+    var wireNote: String {
+        if case .connecting = state, Date().timeIntervalSince(connectedAt) > 4 {
+            if wire.packets == 0 { return "Nothing comes back from the device. Is its USB PORT \"computer\" (LOOM-8: Setup)? " + wire.summary }
+            if wire.sysex == 0 { return "MIDI comes in but no SysEx: not a mirror. " + wire.summary }
+            if wire.mirrorFrames == 0 { return "SysEx comes in but not the mirror's: the firmware may lack it. " + wire.summary }
+        }
+        return wire.summary
     }
 
     func disconnect(note: String? = nil) {
@@ -167,21 +200,30 @@ final class MirrorController: ObservableObject {
         let words = UMPSysEx.packets(for: message)
         // one event list per message; a long SysEx is several packets, each 2 words
         var list = MIDIEventList()
+        let size = MemoryLayout<MIDIEventList>.size          // (one packet of up to 64 words fits inline)
         let cap = 64
         var packet = MIDIEventListInit(&list, ._1_0)
         var i = 0
         while i < words.count {
             let n = min(cap, words.count - i)
             let chunk = Array(words[i ..< i + n])
-            packet = chunk.withUnsafeBufferPointer { MIDIEventListAdd(&list, 1024, packet, 0, n, $0.baseAddress!) }
+            packet = chunk.withUnsafeBufferPointer { MIDIEventListAdd(&list, size, packet, 0, n, $0.baseAddress!) }
+            if packet == nil { break }                          // (no room: a message longer than the list; ours are short)
             i += n
         }
-        MIDISendEventList(outPort, destination, &list)
+        let st = MIDISendEventList(outPort, destination, &list)
+        wire.sent += 1
+        if st != noErr { wire.sendErrors += 1; wire.lastSendStatus = st }
     }
 
-    private func receive(words: [UInt32]) {
+    private func receive(words: [UInt32], packets: Int) {
+        wire.packets += packets
+        wire.words += words.count
         for msg in assembler.feed(words: words) {
+            wire.sysex += 1
+            wire.lastHead = msg.prefix(8).map { String(format: "%02X", $0) }.joined(separator: " ")
             let r = screen.feed(message: msg)
+            if r.cmd != nil { wire.mirrorFrames += 1 }
             if r.cmd == MirrorCommand.request, let h = screen.hello {
                 hello = h
                 if h.on, case .connecting = state { state = .mirroring }

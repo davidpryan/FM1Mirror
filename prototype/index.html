@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chord guide · prototype 2</title>
+<style>
+  :root { --bg:#000; --pane:#141414; --ink:#f2efe8; --dim:#8d8a84; --chip:#262626; --on:#e6b432; --on-ink:#171002; --chord:#e6b432; --root:#d66030; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#222; color:var(--ink); font: 13px/1.3 -apple-system, "SF Pro Text", Inter, system-ui, sans-serif; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh; gap:10px; }
+  .bar { color:#aaa; font-size:12px; display:flex; gap:8px; align-items:center; }
+  .bar button { font:inherit; background:#333; color:#eee; border:0; border-radius:6px; padding:4px 10px; cursor:pointer; }
+  .bar button.on { background:#e6b432; color:#111; }
+  /* the phone */
+  .phone { --u: calc(min(100vw, 1310px) / 874); font-size: calc(var(--u) * 9.5); width: min(100vw, 1310px); aspect-ratio: 874/402; background:var(--bg); border-radius: 28px; display:grid; grid-template-columns: 228fr 390fr 228fr; grid-template-rows: 1fr; gap: calc(var(--u)*6); padding: calc(var(--u)*10) calc(var(--u)*14); position:relative; overflow:hidden; }
+  .phone.portrait { --u: calc(min(100vw, 1310px, 70vh * 402 / 874) / 402); width: min(100vw, 1310px, 70vh * 402 / 874); aspect-ratio: 402/874; grid-template-columns: 1fr 1fr; grid-template-rows: auto 1fr; }
+  .phone.portrait { grid-template-rows: auto minmax(0, 1fr); }
+  .phone.portrait .center { grid-column: 1 / 3; grid-row: 1; }
+  .phone.portrait #left { grid-row: 2; grid-column: 1; }
+  .phone.portrait #right { grid-row: 2; grid-column: 2; }
+  .pane { background:var(--pane); border-radius: calc(var(--u)*10); padding: calc(var(--u)*8); display:flex; flex-direction:column; gap: calc(var(--u)*6); min-width:0; min-height:0; overflow:hidden; }
+  .center { display:flex; flex-direction:column; align-items:center; justify-content:center; gap: calc(var(--u)*4); min-width:0; }
+  .screen { width: calc(var(--u)*318); height: calc(var(--u)*318); image-rendering: pixelated; border-radius: calc(var(--u)*4); display:block; }
+  .phone.kb-centre .screen { width: calc(var(--u)*290); height: calc(var(--u)*290); }
+  .phone.portrait .screen { width: calc(var(--u)*374); height: calc(var(--u)*374); }
+  /* portrait, the strip centred: the screen keeps its width; the strip takes the panes' room, not the screen's */
+  .phone.portrait.kb-centre .screen { width: calc(var(--u)*374); height: calc(var(--u)*374); }
+  .phone.portrait .center .kbd { width: calc(var(--u)*374); height: calc(var(--u)*56); }
+  h2 { margin:0; font-size: 1.05em; font-weight:700; letter-spacing:.02em; color:var(--dim); text-transform:uppercase; display:flex; justify-content:space-between; align-items:center; }
+  .row { display:flex; flex-wrap:wrap; gap: calc(var(--u)*3); align-items:center; }
+  .chip { background:var(--chip); border:0; color:var(--ink); border-radius: calc(var(--u)*5); padding: calc(var(--u)*3) calc(var(--u)*6); font: inherit; font-weight:600; cursor:pointer; min-width: calc(var(--u)*22); text-align:center; }
+  .chip.on { background:var(--on); color:var(--on-ink); }
+  .chip.small { padding: calc(var(--u)*2) calc(var(--u)*4); font-weight:500; }
+  .seg { display:inline-flex; gap:2px; background:#0d0d0d; border-radius: calc(var(--u)*6); padding:2px; }
+  .seg .chip { background:transparent; color:var(--dim); border-radius: calc(var(--u)*5); min-width: calc(var(--u)*30); padding: calc(var(--u)*2) calc(var(--u)*5); }
+  .seg .chip.on { background:#333; color:var(--ink); }
+  select { font: inherit; background:var(--chip); color:var(--ink); border:0; border-radius: calc(var(--u)*5); padding: calc(var(--u)*3) calc(var(--u)*5); width:100%; }
+  .big { font-size: 1.7em; font-weight:800; letter-spacing:-.01em; }
+  .notes { font-size: 1.05em; color: var(--dim); }
+  .keys { display:flex; flex-wrap:wrap; gap: calc(var(--u)*3); }
+  .key { border-radius: calc(var(--u)*4); padding: calc(var(--u)*3) calc(var(--u)*5); font-weight:700; background:#f2efe8; color:#111; display:flex; flex-direction:column; align-items:center; line-height:1.05; min-width: calc(var(--u)*30); }
+  .key.b { background:#2e2e2e; color:#f2efe8; border:1px solid #555; }
+  .key small { font-weight:500; font-size:.8em; opacity:.75; }
+  .key.root { outline: 2px solid var(--root); }
+  .hint { color:var(--dim); font-size:.9em; }
+  .warn { color:#ff9a6a; font-size:.92em; }
+  .stepper { display:flex; align-items:center; gap: calc(var(--u)*4); }
+  .kbd { display:block; }
+  .center .kbd { width: calc(var(--u)*360); height: calc(var(--u)*52); }
+  .pane .kbd { width: 100%; height: auto; aspect-ratio: 160/26; margin-top:auto; }
+  .kbd rect.w { fill:#ece8df; stroke:#111; stroke-width:.6; }
+  .kbd rect.b { fill:#1c1c1c; stroke:#444; stroke-width:.6; }
+  .kbd rect.w.scale { fill:#b9e3df; }
+  .kbd rect.b.scale { fill:#2f6f69; }
+  .kbd rect.w.chord { fill:var(--chord); }
+  .kbd rect.b.chord { fill:#b98a1c; }
+  .kbd rect.root { stroke:var(--root); stroke-width:1.6; }
+  .kbd text { font: 600 4.2px -apple-system, system-ui, sans-serif; fill:#333; text-anchor:middle; pointer-events:none; }
+  .kbd text.bl { fill:#ddd; }
+  .legend { display:flex; gap: calc(var(--u)*8); color:var(--dim); font-size:.85em; }
+  .legend i { display:inline-block; width:.9em; height:.9em; border-radius:2px; vertical-align:-1px; margin-right:.3em; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<div class="bar">Preview as: <button id="pl" class="on">landscape</button><button id="pp">portrait</button><span>· the keyboard strip and all choices live inside the phone frame</span></div>
+<div class="phone kb-left" id="phone">
+  <!-- LEFT: the chord, in the key -->
+  <section class="pane" id="left">
+    <h2><span>Chord in <span id="keyname">C major</span></span></h2>
+    <div class="row" id="degrees"></div>
+    <div class="row"><span class="seg" id="inv"></span><button class="chip small" id="sev">7ths</button></div>
+    <div class="big" id="cname">C</div>
+    <div class="notes" id="cnotes">C · E · G</div>
+    <div class="keys" id="ckeys"></div>
+    <div class="warn" id="cwarn"></div>
+    <div class="hint">Hold these together. Root outlined.</div>
+    <svg class="kbd" id="kbdL" viewBox="0 0 160 26" preserveAspectRatio="none"></svg>
+  </section>
+
+  <!-- CENTRE: the mirror -->
+  <section class="center">
+    <img class="screen" src="screen.png" alt="the FM-1's screen, mirrored">
+    <svg class="kbd" id="kbdC" viewBox="0 0 160 26" preserveAspectRatio="none"></svg>
+    <div class="legend" id="legend"><span><i style="background:#b9e3df"></i>in the scale</span><span><i style="background:var(--chord)"></i>the chord</span><span><i style="background:#ece8df;outline:2px solid var(--root)"></i>root</span></div>
+  </section>
+
+  <!-- RIGHT: key and scale -->
+  <section class="pane" id="right">
+    <h2><span>Key &amp; scale</span><span class="seg" id="kbsw" title="the keyboard strip"><button class="chip" data-kb="off">Keys off</button><button class="chip" data-kb="centre">Centre</button><button class="chip on" data-kb="left">Left</button></span></h2>
+    <div class="row" id="tonics"></div>
+    <select id="scale"></select>
+    <div class="stepper"><span class="hint">OCT on the FM-1</span><button class="chip small" id="octm">−</button><b id="octv">0</b><button class="chip small" id="octp">+</button></div>
+    <div class="big" id="sname">C major</div>
+    <div class="keys" id="skeys"></div>
+    <div class="hint" id="shint"></div>
+  </section>
+</div>
+<script>
+const NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+const FLATS = {1:"Db",3:"Eb",6:"Gb",8:"Ab",10:"Bb"};
+const SCALES = {
+  "major":[0,2,4,5,7,9,11], "natural minor":[0,2,3,5,7,8,10], "harmonic minor":[0,2,3,5,7,8,11], "melodic minor":[0,2,3,5,7,9,11],
+  "dorian":[0,2,3,5,7,9,10], "phrygian":[0,1,3,5,7,8,10], "lydian":[0,2,4,6,7,9,11], "mixolydian":[0,2,4,5,7,9,10], "locrian":[0,1,3,5,6,8,10],
+  "major pentatonic":[0,2,4,7,9], "minor pentatonic":[0,3,5,7,10], "blues":[0,3,5,6,7,10]
+};
+const ROMAN = ["I","II","III","IV","V","VI","VII"];
+const KEYS = []; { let w = 0, b = 0; for (let k = 0; k < 27; k++) { const n = 53 + k, pc = n % 12, black = [1,3,6,8,10].includes(pc); KEYS.push({k, n, pc, black, num: black ? ++b : ++w}); } }
+const S = { tonic: 0, scale: "major", oct: 0, degree: 0, seventh: false, inv: 0, kb: "left", portrait: false };
+const nm = (pc, f) => f && FLATS[pc] ? FLATS[pc] : NAMES[pc];
+const octName = n => nm(n % 12) + (Math.floor(n / 12) - 1);
+const lo = () => 53 + 12 * S.oct, hi = () => 79 + 12 * S.oct;
+const keyOf = n => KEYS.find(k => k.n + 12 * S.oct === n);
+const scalePcs = () => SCALES[S.scale].map(i => (S.tonic + i) % 12);
+function diatonic(deg) {
+  const sc = SCALES[S.scale]; if (sc.length < 7) return null;
+  const pick = j => S.tonic + sc[(deg + j) % 7] + 12 * Math.floor((deg + j) / 7);
+  const ivs = [0, 2, 4].concat(S.seventh ? [6] : []).map(j => pick(j) - pick(0));
+  return { root: (S.tonic + sc[deg]) % 12, ivs };
+}
+function qualName(ivs) {
+  const t = ivs.slice(0, 3).join(), s7 = ivs[3];
+  let q = t === "0,4,7" ? "" : t === "0,3,7" ? "m" : t === "0,3,6" ? "dim" : t === "0,4,8" ? "aug" : t === "0,2,7" ? "sus2" : t === "0,5,7" ? "sus4" : "?";
+  if (s7 != null) q = t === "0,3,6" ? (s7 === 9 ? "dim7" : "m7♭5") : q === "" ? (s7 === 11 ? "maj7" : "7") : q === "m" ? (s7 === 11 ? "m(maj7)" : "m7") : q + "7";
+  return q;
+}
+function roman(d) { const dd = diatonic(d), q = qualName(dd.ivs), r = ROMAN[d]; return q.startsWith("m") && !q.startsWith("maj") ? r.toLowerCase() : q.startsWith("dim") ? r.toLowerCase() + "°" : q.startsWith("aug") ? r + "+" : r; }
+/* the voicing: inversion inv puts chord tone inv at the bottom; placed from the lowest such bass the keys reach */
+function voicing(root, ivs, inv) {
+  const n = ivs.length, order = ivs.map((_, i) => ivs[(inv + i) % n] + (inv + i >= n ? 12 : 0)), base = order[0];
+  const rel = order.map(v => v - base);                   // intervals above the bass note
+  const bassPc = (root + base) % 12;
+  for (let b = lo() + ((bassPc - lo()) % 12 + 12) % 12; b <= hi(); b += 12) {
+    const notes = rel.map(i => b + i);
+    if (notes.every(x => x <= hi())) return { notes, ok: true };
+  }
+  const b = lo() + ((bassPc - lo()) % 12 + 12) % 12, notes = rel.map(i => b + i).filter(x => x <= hi());
+  return { notes, ok: notes.length >= 3, spill: rel.length - notes.length };
+}
+function keyChip(n, root) {
+  const k = keyOf(n); if (!k) return `<span class="key b" style="opacity:.5">?<small>${octName(n)}</small></span>`;
+  return `<span class="key ${k.black ? "b" : "w"} ${n % 12 === root ? "root" : ""}">${k.black ? "B" : "W"}${k.num}<small>${octName(n)}</small></span>`;
+}
+function kbdSvg(pcs, chordNotes, root) {
+  const whites = KEYS.filter(k => !k.black), ww = 160 / whites.length; let svg = "";
+  whites.forEach((k, i) => { const n = k.n + 12 * S.oct, cls = ["w", pcs.includes(k.pc) ? "scale" : "", chordNotes.includes(n) ? "chord" : "", chordNotes.includes(n) && k.pc === root ? "root" : ""].join(" "); svg += `<rect class="${cls}" x="${i * ww}" y="0" width="${ww}" height="26" rx=".8"/><text x="${i * ww + ww / 2}" y="24">${k.num}</text>`; });
+  let wi = 0; KEYS.forEach(k => { if (!k.black) { wi++; return; } const n = k.n + 12 * S.oct, cls = ["b", pcs.includes(k.pc) ? "scale" : "", chordNotes.includes(n) ? "chord" : "", chordNotes.includes(n) && k.pc === root ? "root" : ""].join(" "); const x = wi * ww - ww * .3; svg += `<rect class="${cls}" x="${x}" y="0" width="${ww * .6}" height="16" rx=".8"/><text class="bl" x="${x + ww * .3}" y="12.5">${k.num}</text>`; });
+  return svg;
+}
+function render() {
+  const phone = document.getElementById("phone");
+  phone.className = "phone kb-" + S.kb + (S.portrait ? " portrait" : "");
+  document.querySelectorAll("#kbsw .chip").forEach(c => c.classList.toggle("on", c.dataset.kb === S.kb));
+  document.getElementById("tonics").innerHTML = NAMES.map((n, i) => `<button class="chip small ${i === S.tonic ? "on" : ""}" data-tonic="${i}">${nm(i, true) !== n ? n + "/" + nm(i, true) : n}</button>`).join("");
+  document.getElementById("scale").innerHTML = Object.keys(SCALES).map(s => `<option ${s === S.scale ? "selected" : ""}>${s}</option>`).join("");
+  document.getElementById("octv").textContent = (S.oct > 0 ? "+" : "") + S.oct;
+  document.getElementById("sname").textContent = nm(S.tonic) + " " + S.scale;
+  document.getElementById("keyname").textContent = nm(S.tonic) + " " + S.scale;
+  const pcs = scalePcs();
+  const first = []; for (let n = lo(); n <= hi() && first.length < pcs.length + 1; n++) if (pcs.includes(n % 12) && (first.length === 0 ? n % 12 === S.tonic : true)) first.push(n);
+  document.getElementById("skeys").innerHTML = first.map(n => keyChip(n, S.tonic)).join("");
+  document.getElementById("shint").textContent = `One octave from the lowest ${nm(S.tonic)} the keys reach; the pattern repeats above.`;
+  const sc = SCALES[S.scale], seven = sc.length === 7;
+  document.getElementById("degrees").innerHTML = seven ? sc.map((_, d) => `<button class="chip ${d === S.degree ? "on" : ""}" data-deg="${d}">${roman(d)}</button>`).join("") : `<span class="hint">A five- or six-note scale has no stacked-third chords: pick a seven-note scale.</span>`;
+  const c = seven ? diatonic(S.degree) : null, n = c ? c.ivs.length : 3;
+  const INV = ["Root", "1st", "2nd", "3rd"];
+  document.getElementById("inv").innerHTML = INV.slice(0, n).map((t, i) => `<button class="chip ${i === S.inv ? "on" : ""}" data-inv="${i}">${t}</button>`).join("");
+  document.getElementById("sev").classList.toggle("on", S.seventh);
+  if (S.inv >= n) S.inv = 0;
+  let chordNotes = [], warn = "", root = -1;
+  if (c) {
+    root = c.root;
+    const v = voicing(c.root, c.ivs, S.inv); chordNotes = v.notes;
+    document.getElementById("cname").textContent = nm(c.root) + qualName(c.ivs) + (S.inv ? " / " + nm((c.root + c.ivs[S.inv]) % 12) : "");
+    document.getElementById("cnotes").textContent = c.ivs.map(i => nm((c.root + i) % 12)).join(" · ") + (S.inv ? `  (${INV[S.inv]} inversion: ${nm((c.root + c.ivs[S.inv]) % 12)} at the bottom)` : "");
+    document.getElementById("ckeys").innerHTML = v.notes.map(x => keyChip(x, c.root)).join(" ");
+    if (!v.ok) warn = "Does not fit the keys at this octave: press OCT− on the FM-1 and set it here too.";
+    else if (v.spill) warn = `The top ${v.spill === 1 ? "note" : v.spill + " notes"} would be above the last key: left out, or press OCT−.`;
+  } else { document.getElementById("cname").textContent = "—"; document.getElementById("cnotes").textContent = ""; document.getElementById("ckeys").innerHTML = ""; }
+  document.getElementById("cwarn").textContent = warn;
+  const svg = kbdSvg(pcs, chordNotes, root);
+  document.getElementById("kbdL").innerHTML = svg; document.getElementById("kbdC").innerHTML = svg;
+  document.getElementById("kbdL").classList.toggle("hidden", S.kb !== "left");
+  document.getElementById("kbdC").classList.toggle("hidden", S.kb !== "centre");
+  document.getElementById("legend").classList.toggle("hidden", S.kb !== "centre");
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.tonic != null) S.tonic = +b.dataset.tonic;
+  if (b.dataset.deg != null) S.degree = +b.dataset.deg;
+  if (b.dataset.inv != null) S.inv = +b.dataset.inv;
+  if (b.dataset.kb) S.kb = b.dataset.kb;
+  if (b.id === "sev") S.seventh = !S.seventh;
+  if (b.id === "octm") S.oct = Math.max(-2, S.oct - 1);
+  if (b.id === "octp") S.oct = Math.min(2, S.oct + 1);
+  if (b.id === "pl" || b.id === "pp") { S.portrait = b.id === "pp"; document.getElementById("pl").classList.toggle("on", !S.portrait); document.getElementById("pp").classList.toggle("on", S.portrait); }
+  render();
+});
+document.addEventListener("change", e => { if (e.target.id === "scale") S.scale = e.target.value; render(); });
+render();
+</script>
+</body>
+</html>

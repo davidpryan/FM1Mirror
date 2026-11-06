@@ -21,6 +21,26 @@ No browser on iOS has Web MIDI, which is what fm1-base's own mirror page needs, 
 Demo (no FM-1 around): the Demo button plays a recorded LOOM-8 session; `--demo` as a launch argument starts it at once
 (simulators, screenshots).
 
+## The chord guide
+
+Beside the mirror (landscape) or under it (portrait), for anyone who forgets which keys make which chord:
+
+- **Key & scale** (right): a tonic, a scale (major, the minors, the modes, the pentatonics, blues), and the FM-1's OCT
+  as you have set it (LOOM-8 does not report it). It lists one octave of the scale from the lowest tonic the keys reach,
+  each note as a key: LOOM-8's own numbers, white 1 to 16 and black 1 to 11 from F3, with the note name under it.
+- **Chord in the key** (left): the seven chords of that key as roman numerals (lower case minor, ° diminished), a
+  7ths switch and the inversions. It names the chord (a slash chord when inverted), lists its notes, and shows the keys
+  to hold, root outlined, from the lowest bass the keys reach; it says when a chord would run past the last key.
+- **The keyboard strip**: the 27 keys with their numbers, the scale tinted, the chord lit. Keys off, Centre (under the
+  screen; in portrait the panes move down and the screen keeps its width) or Left (at the bottom of the chord pane, so
+  the screen keeps its size in landscape too).
+
+Hide guide in the toolbar gives the plain mirror back. Every choice is remembered. The music lives in
+`FM1MirrorKit/Sources/FM1MirrorKit/ChordGuide.swift` (`FM1Keyboard`, `MusicalKey`, `Chord`, `Voicing`), tested in
+`ChordGuideTests.swift`. For a look at a chosen state in a simulator, the settings take launch arguments, e.g.
+`-guide.keyboard centre -guide.degree 5 -guide.inversion 1 -guide.seventh 1`. The design was prototyped in
+`prototype/index.html`.
+
 ## Build
 
 Xcode 26 or later. Open `FM1Mirror.xcodeproj`, set your team under Signing, pick your iPhone and run. The project is a
@@ -45,7 +65,7 @@ lost. Core MIDI delivers SysEx as Universal MIDI Packets (SysEx7, type 3), reass
 
 ## Not yet
 
-The panel (the FM-1's buttons, keys and lights beside the screen) and playing the FM-1 from the phone (cmd 0x54), both
+The panel as the FM-1 reports it (its buttons, keys and lights) and playing the FM-1 from the phone (cmd 0x54), both
 of which the web page has; Bluetooth MIDI as a transport. The decoder already parses the panel reports.
 
 ## Licence

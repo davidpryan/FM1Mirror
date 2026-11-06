@@ -1,25 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
-// The session: a Core MIDI client, the FM-1 found among the sources, the mirror asked for, kept alive (cmd 0x50:
-// 2 refresh at the start, 1 every 2 s; the device gives up after 6 s without one), refreshed when a frame is missed,
-// and turned off (0) when the app goes to the background or the user disconnects. The screen is FM1MirrorKit's.
+// The session, on FM1MirrorKit's MirrorLink (the Core MIDI side, the same code mirrorcli proves against an FM-1 from
+// a Mac): the FM-1 found among the endpoints, the mirror asked for (cmd 0x50: 2 refresh at the start, 1 every 2 s;
+// the device gives up after 6 s without one), refreshed when a frame is missed, off (0) when the app goes to the
+// background or the user disconnects. The screen is MirrorScreen's; the picture is drawn 30 times a second at most.
 import Combine
-import CoreMIDI
 import FM1MirrorKit
 import Foundation
 import UIKit
 
-struct MIDIDevice: Identifiable, Hashable {
-    let id: MIDIUniqueID
-    let name: String
-    let source: MIDIEndpointRef
-    let destination: MIDIEndpointRef?
-
-    /// The FM-1 firmwares name their port after the app: "LOOM-8 FM-1", "FM-1 Midi", "ChoralRoot FM-1", "Felucca".
-    var looksLikeFM1: Bool {
-        let n = name.lowercased()
-        return n.contains("fm-1") || n.contains("fm1") || n.contains("loom") || n.contains("choralroot") || n.contains("felucca")
-    }
-}
+typealias MIDIDevice = MirrorEndpoint
 
 @MainActor
 final class MirrorController: ObservableObject {
@@ -31,211 +20,123 @@ final class MirrorController: ObservableObject {
     @Published private(set) var stats = MirrorStats()
     @Published private(set) var hello: MirrorHello?
     @Published private(set) var input: MirrorInput?
+    @Published private(set) var wire = MirrorLink.Wire()
+    @Published private(set) var mirrorFrames = 0
     @Published var selected: MIDIDevice?
-    /// What went over the wire: for the status line when nothing comes back.
-    struct Wire: Equatable {
-        var sent = 0, sendErrors = 0, lastSendStatus: OSStatus = 0
-        var packets = 0, words = 0, sysex = 0, mirrorFrames = 0
-        var lastHead = ""
-        var summary: String {
-            var s = "out \(sent)" + (sendErrors > 0 ? " (\(sendErrors) failed, \(lastSendStatus))" : "")
-            s += " · in \(packets) pkt / \(sysex) sysex / \(mirrorFrames) mirror"
-            if !lastHead.isEmpty { s += " · last " + lastHead }
-            return s
-        }
-    }
-    @Published private(set) var wire = Wire()
-    private var connectedAt = Date.distantPast
 
     let screen = MirrorScreen()
-    private var client = MIDIClientRef()
-    private var inPort = MIDIPortRef()
-    private var outPort = MIDIPortRef()
-    private var connectedSource: MIDIEndpointRef = 0
-    private var destination: MIDIEndpointRef = 0
-    private var assembler = UMPSysExAssembler()
+    private var link: MirrorLink?
     private var keepAlive: Timer?
     private var redraw: Timer?
     private var lastGeneration = -1
     private var lastRefreshAsk = Date.distantPast
+    private var connectedAt = Date.distantPast
     private var demoTask: Task<Void, Never>?
     private var lifecycle: [AnyCancellable] = []
 
     init() {
-        setUpMIDI()
+        do {
+            let l = try MirrorLink(name: "FM1Mirror")
+            l.onMessage = { [weak self] msg in Task { @MainActor in self?.handle(msg) } }
+            l.onSetupChanged = { [weak self] in Task { @MainActor in self?.rescan() } }
+            link = l
+        } catch {
+            state = .failed(String(describing: error))
+        }
         rescan()
         let nc = NotificationCenter.default
         nc.publisher(for: UIApplication.didEnterBackgroundNotification).sink { [weak self] _ in self?.pauseForBackground() }
             .store(in: &lifecycle)
-        nc.publisher(for: UIApplication.willEnterForegroundNotification).sink { [weak self] _ in self?.resumeFromBackground() }
+        nc.publisher(for: UIApplication.willEnterForegroundNotification).sink { [weak self] _ in self?.rescan() }
             .store(in: &lifecycle)
     }
 
-    // MARK: Core MIDI
-
-    private func setUpMIDI() {
-        let status = MIDIClientCreateWithBlock("FM1Mirror" as CFString, &client) { [weak self] _ in
-            Task { @MainActor in self?.rescan() }
-        }
-        guard status == noErr else { state = .failed("Core MIDI client: \(status)"); return }
-        MIDIInputPortCreateWithProtocol(client, "FM1Mirror in" as CFString, ._1_0, &inPort) { [weak self] list, _ in
-            // (Core MIDI's own thread: the words copied out, the parsing on the main actor). The packets are walked
-            // in place: a copy of the first one and MIDIEventPacketNext from the copy's address read garbage after it
-            var words: [UInt32] = []
-            var packets = 0
-            for p in list.unsafeSequence() {
-                let n = Int(p.pointee.wordCount)
-                withUnsafeBytes(of: p.pointee.words) { raw in
-                    let w = raw.bindMemory(to: UInt32.self)
-                    words.append(contentsOf: w.prefix(n))
-                }
-                packets += 1
-            }
-            let got = packets
-            Task { @MainActor in self?.receive(words: words, packets: got) }
-        }
-        MIDIOutputPortCreate(client, "FM1Mirror out" as CFString, &outPort)
-    }
-
     func rescan() {
-        var found: [MIDIDevice] = []
-        for i in 0 ..< MIDIGetNumberOfSources() {
-            let src = MIDIGetSource(i)
-            var entity = MIDIEntityRef()
-            MIDIEndpointGetEntity(src, &entity)
-            var dest: MIDIEndpointRef? = nil
-            if entity != 0, MIDIEntityGetNumberOfDestinations(entity) > 0 {
-                dest = MIDIEntityGetDestination(entity, 0)
-            }
-            found.append(MIDIDevice(id: uniqueID(src), name: displayName(src), source: src, destination: dest))
-        }
+        guard let link else { return }
+        let found = link.endpoints()
         devices = found
         if selected == nil || !found.contains(where: { $0.id == selected?.id }) {
             selected = found.first(where: { $0.looksLikeFM1 && $0.destination != nil }) ?? found.first(where: { $0.destination != nil })
         }
-        if case .mirroring = state, !found.contains(where: { $0.source == connectedSource }) {
+        if case .mirroring = state, link.isConnected, !found.contains(where: { $0.id == selected?.id }) {
             disconnect(note: "The FM-1 was unplugged.")
         }
-    }
-
-    private func uniqueID(_ e: MIDIEndpointRef) -> MIDIUniqueID {
-        var id: MIDIUniqueID = 0
-        MIDIObjectGetIntegerProperty(e, kMIDIPropertyUniqueID, &id)
-        return id
-    }
-
-    private func displayName(_ e: MIDIEndpointRef) -> String {
-        var cf: Unmanaged<CFString>?
-        if MIDIObjectGetStringProperty(e, kMIDIPropertyDisplayName, &cf) == noErr, let s = cf?.takeRetainedValue() {
-            return s as String
-        }
-        if MIDIObjectGetStringProperty(e, kMIDIPropertyName, &cf) == noErr, let s = cf?.takeRetainedValue() {
-            return s as String
-        }
-        return "MIDI device"
     }
 
     // MARK: the session
 
     func connect() {
-        guard let dev = selected, let dest = dev.destination else {
+        guard let link else { return }
+        guard let dev = selected, dev.destination != nil else {
             state = .failed("No MIDI device with an input and an output. Connect the FM-1 by USB-C.")
             return
         }
         stopDemo()
-        if connectedSource != 0 { MIDIPortDisconnectSource(inPort, connectedSource) }
-        let status = MIDIPortConnectSource(inPort, dev.source, nil)
-        guard status == noErr else { state = .failed("Could not listen to \(dev.name): \(status)"); return }
-        connectedSource = dev.source
-        destination = dest
-        assembler = UMPSysExAssembler()
+        do { try link.connect(dev) } catch { state = .failed("\(dev.name): \(error)"); return }
         screen.clear()
         screen.resync()
+        mirrorFrames = 0
+        hello = nil
         state = .connecting
-        wire = Wire()
         connectedAt = Date()
-        send(MirrorScreen.request(2))
+        link.send(MirrorScreen.request(2))
+        wire = link.wire
         keepAlive?.invalidate()
         keepAlive = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self else { return }
-                self.send(MirrorScreen.request(1))
+                guard let self, let link = self.link else { return }
+                link.send(MirrorScreen.request(1))
                 if case .connecting = self.state, Date().timeIntervalSince(self.connectedAt) > 6 {
-                    self.send(MirrorScreen.request(2))     // (asked again: the first may have gone before the device was ready)
+                    link.send(MirrorScreen.request(2))   // (asked again: the first may have gone before the device was ready)
                 }
+                self.wire = link.wire
             }
         }
         startRedraw()
     }
 
-    /// The status line's second half: what the wire says while the screen is awaited, or after a failure.
-    var wireNote: String {
-        if case .connecting = state, Date().timeIntervalSince(connectedAt) > 4 {
-            if wire.packets == 0 { return "Nothing comes back from the device. Is its USB PORT \"computer\" (LOOM-8: Setup)? " + wire.summary }
-            if wire.sysex == 0 { return "MIDI comes in but no SysEx: not a mirror. " + wire.summary }
-            if wire.mirrorFrames == 0 { return "SysEx comes in but not the mirror's: the firmware may lack it. " + wire.summary }
-        }
-        return wire.summary
-    }
-
     func disconnect(note: String? = nil) {
         keepAlive?.invalidate()
         keepAlive = nil
-        if destination != 0 { send(MirrorScreen.request(0)) }
-        if connectedSource != 0 { MIDIPortDisconnectSource(inPort, connectedSource) }
-        connectedSource = 0
-        destination = 0
+        if let link, link.isConnected {
+            link.send(MirrorScreen.request(0))
+            link.disconnect()
+        }
         stopRedraw()
         state = note.map { .failed($0) } ?? .idle
     }
 
     func askRefresh() {
-        guard destination != 0 else { return }
+        guard let link, link.isConnected else { return }
         screen.resync()
-        send(MirrorScreen.request(2))
+        link.send(MirrorScreen.request(2))
     }
 
-    private func send(_ message: [UInt8]) {
-        guard destination != 0 else { return }
-        let words = UMPSysEx.packets(for: message)
-        // one event list per message; a long SysEx is several packets, each 2 words
-        var list = MIDIEventList()
-        let size = MemoryLayout<MIDIEventList>.size          // (one packet of up to 64 words fits inline)
-        let cap = 64
-        var packet = MIDIEventListInit(&list, ._1_0)
-        var i = 0
-        while i < words.count {
-            let n = min(cap, words.count - i)
-            let chunk = Array(words[i ..< i + n])
-            packet = chunk.withUnsafeBufferPointer { MIDIEventListAdd(&list, size, packet, 0, n, $0.baseAddress!) }
-            if packet == nil { break }                          // (no room: a message longer than the list; ours are short)
-            i += n
+    private func handle(_ msg: [UInt8]) {
+        let r = screen.feed(message: msg)
+        if r.cmd != nil { mirrorFrames += 1 }
+        if r.cmd == MirrorCommand.request, let h = screen.hello {
+            hello = h
+            if h.on, case .connecting = state { state = .mirroring }
         }
-        let st = MIDISendEventList(outPort, destination, &list)
-        wire.sent += 1
-        if st != noErr { wire.sendErrors += 1; wire.lastSendStatus = st }
-    }
-
-    private func receive(words: [UInt32], packets: Int) {
-        wire.packets += packets
-        wire.words += words.count
-        for msg in assembler.feed(words: words) {
-            wire.sysex += 1
-            wire.lastHead = msg.prefix(8).map { String(format: "%02X", $0) }.joined(separator: " ")
-            let r = screen.feed(message: msg)
-            if r.cmd != nil { wire.mirrorFrames += 1 }
-            if r.cmd == MirrorCommand.request, let h = screen.hello {
-                hello = h
-                if h.on, case .connecting = state { state = .mirroring }
-            }
-            if r.cmd == MirrorCommand.input { input = screen.input }
-            if r.wantsRefresh, Date().timeIntervalSince(lastRefreshAsk) > 0.5 {
-                lastRefreshAsk = Date()
-                askRefresh()
-            }
-            if case .connecting = state, r.cmd == MirrorCommand.rect || r.cmd == MirrorCommand.fill { state = .mirroring }
+        if r.cmd == MirrorCommand.input { input = screen.input }
+        if r.wantsRefresh, Date().timeIntervalSince(lastRefreshAsk) > 0.5 {
+            lastRefreshAsk = Date()
+            askRefresh()
         }
+        if case .connecting = state, r.cmd == MirrorCommand.rect || r.cmd == MirrorCommand.fill { state = .mirroring }
         stats = screen.stats
+    }
+
+    /// The status line's second half: what the wire says while the screen is awaited, or after a failure.
+    var wireNote: String {
+        let w = link?.wire ?? wire
+        if case .connecting = state, Date().timeIntervalSince(connectedAt) > 4 {
+            if w.packets == 0 { return "Nothing comes back from the device. Is its USB PORT \"computer\" (LOOM-8: Setup)? " + w.summary }
+            if w.sysex == 0 { return "MIDI comes in but no SysEx: not a mirror. " + w.summary }
+            if mirrorFrames == 0 { return "SysEx comes in but not the mirror's: the firmware may lack it. " + w.summary }
+        }
+        return w.summary + " / \(mirrorFrames) mirror"
     }
 
     // MARK: the picture
@@ -253,6 +154,7 @@ final class MirrorController: ObservableObject {
     }
 
     private func redrawIfChanged() {
+        if let link { wire = link.wire }
         guard screen.generation != lastGeneration else { return }
         lastGeneration = screen.generation
         image = Self.makeImage(screen.rgba())
@@ -270,12 +172,10 @@ final class MirrorController: ObservableObject {
     // MARK: background
 
     private func pauseForBackground() {
-        if case .mirroring = state { disconnect() ; state = .idle }
-        if case .connecting = state { disconnect() ; state = .idle }
-    }
-
-    private func resumeFromBackground() {
-        rescan()
+        switch state {
+        case .mirroring, .connecting: disconnect(); state = .idle
+        default: break
+        }
     }
 
     // MARK: the demo (a recorded stream, so the app shows a screen with no FM-1 around)
@@ -295,8 +195,7 @@ final class MirrorController: ObservableObject {
         startRedraw()
         demoTask?.cancel()
         demoTask = Task { [weak self] in
-            // the recording at about the pace it was made: ~150 messages a second
-            for (k, msg) in messages.enumerated() {
+            for (k, msg) in messages.enumerated() {      // about the pace it was made: ~150 messages a second
                 if Task.isCancelled { return }
                 guard let self else { return }
                 self.screen.feed(message: msg)

@@ -29,6 +29,9 @@ struct ContentView: View {
         .persistentSystemOverlays(chromeHidden ? .hidden : .automatic)
         .onAppear {                                  // (--demo: the recording at once, for a look with no FM-1: simulators, screenshots)
             if CommandLine.arguments.contains("--demo") { mirror.startDemo() }
+            if CommandLine.arguments.contains("--mirror") {            // (--mirror: connect at once; a simulator with the FM-1 on the Mac)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { mirror.rescan(); mirror.connect() }
+            }
         }
     }
 
